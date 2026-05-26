@@ -1,0 +1,8 @@
+.DS_Store
+.idea
+logs
+tmp
+*.iml
+.air.toml
+docker/*.yaml
+docker/*.yml

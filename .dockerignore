@@ -1,0 +1,10 @@
+.DS_Store
+.dockerignore
+.git
+.gitignore
+.idea
+README.md
+logs
+docker
+tmp
+*.iml
