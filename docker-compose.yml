@@ -7,8 +7,15 @@ services:
       - .env
     ports:
       - "1323:1323"
+    networks:
+      - ajouevent-network
     logging:
       driver: loki
       options:
         loki-url: http://127.0.0.1:3100/loki/api/v1/push
         loki-external-labels: service=ajouevent-crawling,container_name=ajouevent-crawling
+
+networks:
+  ajouevent-network:
+    external: true
+    name: ajouevent_ajouevent-network

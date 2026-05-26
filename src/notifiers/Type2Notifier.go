@@ -64,11 +64,11 @@ func (notifier *Type2Notifier) getNotice(sel *goquery.Selection, noticeChan chan
 	date = date[:19]
 
 	doc, err := NewDocumentFromPage(url)
-    if err != nil {
-        ErrorLogger.Printf("Failed to load notice page: %s, URL: %s", err, url)
-        noticeChan <- Notice{}  // 에러 발생 시 빈 Notice 반환 
-        return
-    }
+	if err != nil {
+		LogError("notice_page_load_failed", "topic", notifier.displayTopic(), "error", err)
+		noticeChan <- Notice{} // 에러 발생 시 빈 Notice 반환
+		return
+	}
 
 	contents := make([]string, 0, sel.Length())
 	sel = doc.Find(notifier.ContentSelector)

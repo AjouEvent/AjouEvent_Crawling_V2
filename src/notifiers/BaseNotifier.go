@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 
@@ -40,30 +41,39 @@ func (BaseNotifier) New(config NotifierConfig) *BaseNotifier {
 
 func (notifier *BaseNotifier) Notify() {
 	defer func() {
-		recover()
+		if r := recover(); r != nil {
+			LogError("crawl_panic", "topic", notifier.displayTopic(), "error", r)
+		}
 	}()
+
+	startedAt := time.Now()
+	topic := notifier.displayTopic()
+	LogInfo("crawl_started", "topic", topic)
 
 	notices := notifier.scrapeNotice() // 여기서 에러가 발생하면 notices는 nil 또는 빈 슬라이스가 됨
 	if notices == nil {
+		LogError("crawl_finished", "topic", topic, "result", "failed", "elapsed_ms", time.Since(startedAt))
 		return // 에러가 발생한 경우 크롤링을 중단하고 빠져나감
 	}
 
+	LogInfo("crawl_finished", "topic", topic, "result", "success", "notices", len(notices), "elapsed_ms", time.Since(startedAt))
+
 	for _, notice := range notices {
+		LogInfo("notice_detected", "topic", topic, "id", notice.ID, "title", notice.Title)
 		SendCrawlingWebhook(os.Getenv("WEBHOOK_ENDPOINT"), notice)
-		SentNoticeLogger.Println(notice)
 	}
 }
 
 func (notifier *BaseNotifier) scrapeNotice() []Notice {
 	doc, err := NewDocumentFromPage(notifier.NoticeUrl) // 에러 반환 받음
 	if err != nil {
-		ErrorLogger.Printf("Failed to load page: %s", err) // 에러 로깅
-		return nil                                        // 에러 발생 시 빈 리스트 반환하거나 다른 적절한 처리
+		LogError("crawl_page_load_failed", "topic", notifier.displayTopic(), "error", err)
+		return nil // 에러 발생 시 빈 리스트 반환하거나 다른 적절한 처리
 	}
 
 	err = notifier.checkHTML(doc)
 	if err != nil {
-		ErrorLogger.Printf("HTML check failed: %s", err)
+		LogError("crawl_html_check_failed", "topic", notifier.displayTopic(), "error", err)
 		return nil
 	}
 
@@ -75,6 +85,10 @@ func (notifier *BaseNotifier) scrapeNotice() []Notice {
 	notices = append(notices, numNotices...)
 
 	return notices
+}
+
+func (notifier *BaseNotifier) displayTopic() string {
+	return notifier.EnglishTopic + "(" + notifier.KoreanTopic + ")"
 }
 
 func (notifier *BaseNotifier) checkHTML(doc *goquery.Document) error {

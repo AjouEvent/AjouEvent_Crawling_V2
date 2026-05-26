@@ -99,6 +99,7 @@ func formatLogValue(value any) string {
 }
 
 func ConnectDB() *sql.DB {
+	startedAt := time.Now()
 	config := mysql.Config{
 		User:                 os.Getenv("DB_USER"),
 		Passwd:               os.Getenv("DB_PW"),
@@ -114,8 +115,10 @@ func ConnectDB() *sql.DB {
 	db := sql.OpenDB(connector)
 	err = db.Ping()
 	if err != nil {
+		LogError("db_connect_failed", "error", err, "elapsed_ms", time.Since(startedAt))
 		ErrorLogger.Panic(err)
 	}
+	LogInfo("db_connected", "elapsed_ms", time.Since(startedAt))
 	return db
 }
 
@@ -172,6 +175,7 @@ func loadNoticeValue(topic, noticeType string) int {
 
 // 웹훅을 호출할 때 Redis에서 가져온 토큰을 Bearer로 헤더에 추가
 func SendCrawlingWebhook(url string, payload any) {
+	startedAt := time.Now()
 	payloadJson, err := json.Marshal(payload)
 	if err != nil {
 		ErrorLogger.Panic(err)
@@ -197,6 +201,7 @@ func SendCrawlingWebhook(url string, payload any) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
+		LogError("webhook_finished", "result", "failed", "error", err, "elapsed_ms", time.Since(startedAt))
 		ErrorLogger.Panic(err)
 	}
 	defer resp.Body.Close()
@@ -206,7 +211,11 @@ func SendCrawlingWebhook(url string, payload any) {
 	if err != nil {
 		ErrorLogger.Panic(err)
 	}
-	PostLogger.Println(string(body))
+	result := "success"
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		result = "failed"
+	}
+	LogPost("webhook_finished", "result", result, "status", resp.StatusCode, "elapsed_ms", time.Since(startedAt), "response_bytes", len(body))
 }
 
 func GetNumNoticeCountReference(doc *goquery.Document, englishTopic, boxNoticeSelector string) int {
@@ -219,11 +228,12 @@ func GetNumNoticeCountReference(doc *goquery.Document, englishTopic, boxNoticeSe
 }
 
 func NewDocumentFromPage(url string) (*goquery.Document, error) {
+	startedAt := time.Now()
 	// HTTP GET 요청을 위한 새로운 요청 생성
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		// 요청 생성 에러 발생 시 에러 반환
-		ErrorLogger.Printf("Request creation error: %s", err)
+		LogError("http_request_create_failed", "error", err)
 		return nil, err
 	}
 
@@ -237,7 +247,7 @@ func NewDocumentFromPage(url string) (*goquery.Document, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		// 네트워크 에러 발생 시 에러 반환
-		ErrorLogger.Printf("Network error: %s", err)
+		LogError("http_request_failed", "result", "failed", "error", err, "elapsed_ms", time.Since(startedAt))
 		return nil, err
 	}
 
@@ -246,7 +256,7 @@ func NewDocumentFromPage(url string) (*goquery.Document, error) {
 	// 응답 상태 코드 확인
 	if resp.StatusCode != http.StatusOK {
 		// 상태 코드 에러 발생 시 에러 반환
-		ErrorLogger.Printf("Status code error: %d, URL: %s", resp.StatusCode, url)
+		LogError("http_request_finished", "result", "failed", "status", resp.StatusCode, "elapsed_ms", time.Since(startedAt))
 		return nil, fmt.Errorf("status code error: %d, URL: %s", resp.StatusCode, url)
 	}
 
@@ -254,7 +264,7 @@ func NewDocumentFromPage(url string) (*goquery.Document, error) {
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		// 파싱 에러 발생 시 에러 반환
-		ErrorLogger.Printf("Error parsing document: %s", err)
+		LogError("html_parse_failed", "result", "failed", "error", err, "elapsed_ms", time.Since(startedAt))
 		return nil, err
 	}
 

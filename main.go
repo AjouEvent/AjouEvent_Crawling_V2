@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"os"
 	"strconv"
 	"time"
@@ -48,7 +47,7 @@ func main() {
 	for {
 		select {
 		case <-noticeTicker.C:
-			log.Print("working")
+			LogInfo("crawl_tick")
 			for _, notifier := range notifiers {
 				go notifier.Notify()
 			}
