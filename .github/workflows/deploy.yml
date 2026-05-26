@@ -1,0 +1,97 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect app image changes
+        id: changes
+        run: |
+          if [ "${{ github.event.before }}" = "0000000000000000000000000000000000000000" ]; then
+            changed_files="$(git ls-tree -r --name-only HEAD)"
+          else
+            changed_files="$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})"
+          fi
+
+          if echo "$changed_files" | grep -Eq '^(docker/Dockerfile|go\.mod|go\.sum|main\.go|config/|models/|src/)'; then
+            echo "app_changed=true" >> "$GITHUB_OUTPUT"
+            echo "image_tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_changed=false" >> "$GITHUB_OUTPUT"
+            echo "image_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.changes.outputs.app_changed == 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+
+      - name: Log in to Docker Hub
+        if: steps.changes.outputs.app_changed == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        if: steps.changes.outputs.app_changed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: prod
+          push: true
+          cache-from: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/ajouevent-crawling:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/ajouevent-crawling:buildcache,mode=max
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/ajouevent-crawling:latest
+            ${{ secrets.DOCKER_USERNAME }}/ajouevent-crawling:${{ github.sha }}
+
+      - name: Copy deployment files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          port: 20000
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: /home/ubuntu/crawling
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1
+        env:
+          APP_CHANGED: ${{ steps.changes.outputs.app_changed }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          port: 20000
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 30m
+          envs: APP_CHANGED
+          script: |
+            mkdir -p /home/ubuntu/crawling
+            cd /home/ubuntu/crawling
+            if [ ! -f .env ]; then
+              echo "/home/ubuntu/crawling/.env is required"
+              exit 1
+            fi
+
+            if [ "$APP_CHANGED" = "true" ]; then
+              docker compose pull crawling
+            fi
+
+            docker compose up -d --pull never
+            docker image prune -f

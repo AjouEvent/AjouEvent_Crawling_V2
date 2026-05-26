@@ -1,0 +1,11 @@
+services:
+  crawling:
+    image: wa6221/ajouevent-crawling:latest
+    container_name: ajouevent-crawling
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "1323:1323"
+    volumes:
+      - ./logs:/workspace/logs
