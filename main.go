@@ -11,19 +11,9 @@ import (
 )
 
 func main() {
-	CreateDir("logs")
-
-	errorLogFile := OpenLogFile("logs/errorLog.txt")
-	defer errorLogFile.Close()
-	ErrorLogger = CreateLogger(errorLogFile)
-
-	sentNoticeLogFile := OpenLogFile("logs/sentNoticeLog.txt")
-	defer sentNoticeLogFile.Close()
-	SentNoticeLogger = CreateLogger(sentNoticeLogFile)
-
-	postLogFile := OpenLogFile("logs/postLog.txt")
-	defer postLogFile.Close()
-	PostLogger = CreateLogger(postLogFile)
+	ErrorLogger = CreateLogger(os.Stderr)
+	SentNoticeLogger = CreateLogger(os.Stdout)
+	PostLogger = CreateLogger(os.Stdout)
 
 	DB = ConnectDB()
 

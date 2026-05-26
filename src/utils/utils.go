@@ -10,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/go-redis/redis/v8"
@@ -23,16 +25,6 @@ var SentNoticeLogger *log.Logger
 var PostLogger *log.Logger
 var DB *sql.DB
 var ctx = context.Background()
-
-func CreateDir(path string) {
-	_, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		err = os.Mkdir(path, os.ModePerm)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-}
 
 // Redis에서 crawling-token 가져오기
 func GetTokenFromRedis() string {
@@ -52,16 +44,58 @@ func GetTokenFromRedis() string {
 	return token
 }
 
-func OpenLogFile(path string) *os.File {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0777)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return file
+func CreateLogger(writer io.Writer) *log.Logger {
+	return log.New(writer, "", log.Ldate|log.Ltime|log.Lshortfile)
 }
 
-func CreateLogger(file *os.File) *log.Logger {
-	return log.New(file, "", log.Ldate|log.Ltime|log.Lshortfile)
+func LogInfo(event string, fields ...any) {
+	writeLog(SentNoticeLogger, "info", event, fields...)
+}
+
+func LogError(event string, fields ...any) {
+	writeLog(ErrorLogger, "error", event, fields...)
+}
+
+func LogPost(event string, fields ...any) {
+	writeLog(PostLogger, "info", event, fields...)
+}
+
+func writeLog(logger *log.Logger, level string, event string, fields ...any) {
+	if logger == nil {
+		logger = log.Default()
+	}
+
+	var builder strings.Builder
+	builder.WriteString("level=")
+	builder.WriteString(level)
+	builder.WriteString(" event=")
+	builder.WriteString(event)
+
+	for i := 0; i+1 < len(fields); i += 2 {
+		key, ok := fields[i].(string)
+		if !ok || key == "" {
+			continue
+		}
+		builder.WriteByte(' ')
+		builder.WriteString(key)
+		builder.WriteByte('=')
+		builder.WriteString(formatLogValue(fields[i+1]))
+	}
+
+	logger.Println(builder.String())
+}
+
+func formatLogValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return fmt.Sprintf("%q", v)
+	case error:
+		return fmt.Sprintf("%q", v.Error())
+	case time.Duration:
+		return fmt.Sprintf("%d", v.Milliseconds())
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 func ConnectDB() *sql.DB {

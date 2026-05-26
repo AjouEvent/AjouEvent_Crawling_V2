@@ -7,5 +7,8 @@ services:
       - .env
     ports:
       - "1323:1323"
-    volumes:
-      - ./logs:/workspace/logs
+    logging:
+      driver: loki
+      options:
+        loki-url: http://127.0.0.1:3100/loki/api/v1/push
+        loki-external-labels: service=ajouevent-crawling,container_name=ajouevent-crawling

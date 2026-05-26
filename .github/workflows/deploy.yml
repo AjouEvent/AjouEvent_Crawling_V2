@@ -93,5 +93,10 @@ jobs:
               docker compose pull crawling
             fi
 
+            if ! docker plugin inspect loki >/dev/null 2>&1; then
+              docker plugin install grafana/loki-docker-driver:latest --alias loki --grant-all-permissions
+            fi
+            docker plugin enable loki >/dev/null 2>&1 || true
+
             docker compose up -d --pull never
             docker image prune -f
