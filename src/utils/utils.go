@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -25,6 +26,12 @@ var SentNoticeLogger *log.Logger
 var PostLogger *log.Logger
 var DB *sql.DB
 var ctx = context.Background()
+
+const (
+	crawlRequestTimeout = 15 * time.Second
+	crawlMaxAttempts    = 3
+	softwareHost        = "software.ajou.ac.kr"
+)
 
 // Redis에서 crawling-token 가져오기
 func GetTokenFromRedis() string {
@@ -229,51 +236,113 @@ func GetNumNoticeCountReference(doc *goquery.Document, englishTopic, boxNoticeSe
 
 func NewDocumentFromPage(url string) (*goquery.Document, error) {
 	startedAt := time.Now()
-	// HTTP GET 요청을 위한 새로운 요청 생성
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		// 요청 생성 에러 발생 시 에러 반환
-		LogError("http_request_create_failed", "error", err)
-		return nil, err
+	client := newCrawlingHTTPClient()
+	var lastErr error
+
+	for attempt := 1; attempt <= crawlMaxAttempts; attempt++ {
+		// HTTP GET 요청을 위한 새로운 요청 생성
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			// 요청 생성 에러 발생 시 에러 반환
+			LogError("http_request_create_failed", "url", url, "error", err)
+			return nil, err
+		}
+
+		// User-Agent 헤더 설정
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36")
+
+		// 요청 실행
+		resp, err := client.Do(req)
+		if err != nil {
+			// Timeout, connection reset 같은 일시적 네트워크 오류는 같은 요청을 재시도한다.
+			lastErr = err
+			LogError("http_request_failed", "result", "failed", "url", url, "attempt", attempt, "error", err, "elapsed_ms", time.Since(startedAt))
+			sleepBeforeRetry(attempt)
+			continue
+		}
+
+		if !isSuccessfulCrawlingResponse(url, resp) {
+			lastErr = fmt.Errorf("status code error: %d, URL: %s", resp.StatusCode, url)
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			LogError("http_request_finished", "result", "failed", "url", url, "attempt", attempt, "status", resp.StatusCode, "elapsed_ms", time.Since(startedAt))
+			// 4xx 대부분은 재시도해도 같은 결과가 예상되므로, 일시 장애성 status만 재시도한다.
+			if !isRetryableStatus(resp.StatusCode) {
+				return nil, lastErr
+			}
+			sleepBeforeRetry(attempt)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusFound {
+			LogInfo("http_redirect_body_used", "url", url, "location", resp.Header.Get("Location"), "attempt", attempt, "elapsed_ms", time.Since(startedAt))
+		}
+
+		// HTML 문서 파싱
+		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			// 파싱 에러 발생 시 에러 반환
+			lastErr = err
+			LogError("html_parse_failed", "result", "failed", "url", url, "attempt", attempt, "error", err, "elapsed_ms", time.Since(startedAt))
+			sleepBeforeRetry(attempt)
+			continue
+		}
+
+		return doc, nil
 	}
 
-	// User-Agent 헤더 설정
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36")
+	return nil, lastErr
+}
 
-	// HTTP 클라이언트 생성 (http→https 리다이렉트 차단: DHE-only 서버 우회)
-	client := &http.Client{
+func newCrawlingHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: crawlRequestTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) > 0 && via[0].URL.Scheme == "http" && req.URL.Scheme == "https" {
+			if len(via) == 0 {
+				return nil
+			}
+			// Software 서버는 HTTPS redirect 이후 Go가 지원하지 않는 DHE cipher suite를 요구한다.
+			// 첫 HTTP 302 응답 body에 실제 HTML이 있으므로 redirect를 멈추고 그 body를 파싱한다.
+			if isSoftwareURL(via[0].URL.String()) {
 				return http.ErrUseLastResponse
+			}
+			// Go 기본 redirect 제한과 같은 10회를 유지해 잘못된 redirect loop를 차단한다.
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after %d redirects", len(via))
 			}
 			return nil
 		},
 	}
+}
 
-	// 요청 실행
-	resp, err := client.Do(req)
+func isSuccessfulCrawlingResponse(requestURL string, resp *http.Response) bool {
+	if resp.StatusCode == http.StatusOK {
+		return true
+	}
+	// Software는 HTTP 302 응답 body에 목록 HTML을 담아 보내므로 성공 응답처럼 취급한다.
+	return resp.StatusCode == http.StatusFound && isSoftwareURL(requestURL)
+}
+
+func isSoftwareURL(rawURL string) bool {
+	parsedURL, err := url.Parse(rawURL)
 	if err != nil {
-		// 네트워크 에러 발생 시 에러 반환
-		LogError("http_request_failed", "result", "failed", "error", err, "elapsed_ms", time.Since(startedAt))
-		return nil, err
+		return false
 	}
+	return parsedURL.Hostname() == softwareHost
+}
 
-	defer resp.Body.Close()
+func isRetryableStatus(statusCode int) bool {
+	// 일시적 서버/트래픽 문제 가능성이 있는 상태만 재시도한다.
+	return statusCode == http.StatusRequestTimeout ||
+		statusCode == http.StatusTooManyRequests ||
+		statusCode >= http.StatusInternalServerError
+}
 
-	// 응답 상태 코드 확인 (302는 http→https 리다이렉트 차단 시 body가 있으므로 허용)
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
-		// 상태 코드 에러 발생 시 에러 반환
-		LogError("http_request_finished", "result", "failed", "status", resp.StatusCode, "elapsed_ms", time.Since(startedAt))
-		return nil, fmt.Errorf("status code error: %d, URL: %s", resp.StatusCode, url)
+func sleepBeforeRetry(attempt int) {
+	if attempt >= crawlMaxAttempts {
+		return
 	}
-
-	// HTML 문서 파싱
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		// 파싱 에러 발생 시 에러 반환
-		LogError("html_parse_failed", "result", "failed", "error", err, "elapsed_ms", time.Since(startedAt))
-		return nil, err
-	}
-
-	return doc, nil
+	// 짧은 선형 backoff로 대상 서버에 재시도 요청이 한 번에 몰리지 않게 한다.
+	time.Sleep(time.Duration(attempt) * 300 * time.Millisecond)
 }
