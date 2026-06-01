@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"golang.org/x/text/encoding/korean"
-	"golang.org/x/text/transform"
 
 	. "Notifier/models"
 	. "Notifier/src/utils"
@@ -19,7 +17,7 @@ type Type2Notifier struct {
 func (Type2Notifier) New(baseNotifier *BaseNotifier) *Type2Notifier {
 	baseNotifier.BoxNoticeSelector = "#sub_contents > div > div.conbody > table:nth-child(2) > tbody > tr:nth-child(n+4):nth-last-child(n+3):nth-of-type(2n):has(td:first-child > img)"
 	baseNotifier.NumNoticeSelector = "#sub_contents > div > div.conbody > table:nth-child(2) > tbody > tr:nth-child(n+4):nth-last-child(n+3):nth-of-type(2n):not(:has(td:first-child > img))"
-	baseNotifier.ContentSelector = "#DivContents p"
+	baseNotifier.ContentSelector = "#DivContents > p, #DivContents > div"
 	baseNotifier.ImagesSelector = "#DivContents img"
 
 	return &Type2Notifier{
@@ -47,7 +45,6 @@ func (notifier *Type2Notifier) getNotice(sel *goquery.Selection, noticeChan chan
 	}
 
 	title := sel.Find("td:nth-child(3) > a").Text()
-	title, _, _ = transform.String(korean.EUCKR.NewDecoder(), title)
 	title = strings.TrimSpace(title)
 
 	url, _ := sel.Find("td:nth-child(3) > a").Attr("href")
@@ -57,7 +54,6 @@ func (notifier *Type2Notifier) getNotice(sel *goquery.Selection, noticeChan chan
 	url = notifier.NoticeUrl + "&" + strings.Join(split[1:3], "&")
 
 	department := sel.Find("td:nth-child(5)").Text()
-	department, _, _ = transform.String(korean.EUCKR.NewDecoder(), department)
 	department = strings.TrimSpace(department)
 
 	date := time.Now().Format(time.RFC3339)
@@ -75,7 +71,6 @@ func (notifier *Type2Notifier) getNotice(sel *goquery.Selection, noticeChan chan
 	sel.Each(func(_ int, s *goquery.Selection) {
 		if s.Text() != "" && s.Text() != "\u00a0" {
 			str := strings.ReplaceAll(s.Text(), "\u00a0", " ")
-			str, _, _ = transform.String(korean.EUCKR.NewDecoder(), str)
 			str = strings.ReplaceAll(str, "\n\n", "\\n")
 			str = strings.ReplaceAll(str, "\n", "\\n")
 			contents = append(contents, strings.TrimSpace(str))
