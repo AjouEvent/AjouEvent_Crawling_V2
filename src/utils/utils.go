@@ -17,6 +17,7 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/go-redis/redis/v8"
 	"github.com/go-sql-driver/mysql"
+	"golang.org/x/net/html/charset"
 
 	. "Notifier/models"
 )
@@ -278,8 +279,18 @@ func NewDocumentFromPage(url string) (*goquery.Document, error) {
 			LogInfo("http_redirect_body_used", "url", url, "location", resp.Header.Get("Location"), "attempt", attempt, "elapsed_ms", time.Since(startedAt))
 		}
 
+		// 응답 charset을 UTF-8로 변환한 뒤 goquery가 HTML을 파싱하게 한다.
+		reader, err := charset.NewReader(resp.Body, resp.Header.Get("Content-Type"))
+		if err != nil {
+			lastErr = err
+			_ = resp.Body.Close()
+			LogError("html_charset_decode_failed", "result", "failed", "url", url, "attempt", attempt, "error", err, "elapsed_ms", time.Since(startedAt))
+			sleepBeforeRetry(attempt)
+			continue
+		}
+
 		// HTML 문서 파싱
-		doc, err := goquery.NewDocumentFromReader(resp.Body)
+		doc, err := goquery.NewDocumentFromReader(reader)
 		_ = resp.Body.Close()
 		if err != nil {
 			// 파싱 에러 발생 시 에러 반환
