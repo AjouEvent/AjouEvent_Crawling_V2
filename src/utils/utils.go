@@ -240,8 +240,15 @@ func NewDocumentFromPage(url string) (*goquery.Document, error) {
 	// User-Agent 헤더 설정
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36")
 
-	// HTTP 클라이언트 생성
-	client := &http.Client{}
+	// HTTP 클라이언트 생성 (http→https 리다이렉트 차단: DHE-only 서버 우회)
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 0 && via[0].URL.Scheme == "http" && req.URL.Scheme == "https" {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
 
 	// 요청 실행
 	resp, err := client.Do(req)
@@ -253,8 +260,8 @@ func NewDocumentFromPage(url string) (*goquery.Document, error) {
 
 	defer resp.Body.Close()
 
-	// 응답 상태 코드 확인
-	if resp.StatusCode != http.StatusOK {
+	// 응답 상태 코드 확인 (302는 http→https 리다이렉트 차단 시 body가 있으므로 허용)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
 		// 상태 코드 에러 발생 시 에러 반환
 		LogError("http_request_finished", "result", "failed", "status", resp.StatusCode, "elapsed_ms", time.Since(startedAt))
 		return nil, fmt.Errorf("status code error: %d, URL: %s", resp.StatusCode, url)
