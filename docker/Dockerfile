@@ -1,31 +1,35 @@
-FROM golang:1.22.0-alpine as dev
+# syntax=docker/dockerfile:1.7
+
+FROM golang:1.27-alpine AS dev
 WORKDIR /workspace
+RUN go install github.com/air-verse/air@latest
 COPY go.mod go.sum ./
-RUN go mod download -x
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-RUN apk add curl && \
-    curl -sSfL https://raw.githubusercontent.com/cosmtrek/air/master/install.sh | sh -s -- -b $(go env GOPATH)/bin && \
-    export PATH=$PATH:$GOROOT/bin:$GOPATH/bin:$(go env GOPATH)/bin
-CMD air
+CMD ["air"]
 EXPOSE 1323
 
-FROM golang:1.22.0-alpine as build
+# 빌드 머신 아키텍처에서 교차 컴파일한다 (arm64 이미지도 에뮬레이션 없이 빌드)
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /workspace
 COPY go.mod go.sum ./
-RUN go mod download -x
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o crawling .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -trimpath -ldflags="-s -w" -o crawling .
 
-FROM alpine:3.19.0 as prod
+FROM alpine:3.23 AS prod
 WORKDIR /workspace
+RUN apk add --no-cache tzdata ca-certificates \
+ && cp /usr/share/zoneinfo/Asia/Seoul /etc/localtime \
+ && echo "Asia/Seoul" > /etc/timezone \
+ && addgroup -S -g 10001 app && adduser -S -u 10001 -G app app
+ENV TZ=Asia/Seoul
 COPY --from=build /workspace/crawling .
 COPY config config
-
-RUN apk add --no-cache tzdata && \
-    cp /usr/share/zoneinfo/Asia/Seoul /etc/localtime && \
-    echo "Asia/Seoul" > /etc/timezone
-
-ENV TZ="Asia/Seoul"
-
-CMD ./crawling
-EXPOSE 1323
+USER app
+CMD ["./crawling"]
