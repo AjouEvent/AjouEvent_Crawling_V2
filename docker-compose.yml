@@ -1,21 +1,20 @@
+# OCI A1 ajouevent-core (10.0.0.170) 에서 실행한다. 로그는 같은 VM 의 Loki(127.0.0.1:3100)로 보낸다.
+# DB(HeatWave 10.0.1.93) · Redis(10.0.0.170) · 웹훅(10.0.0.170:8080) 은 .env 의 사설 IP 로 접근하므로 외부 Docker 네트워크가 필요 없다.
 services:
   crawling:
-    image: wa6221/ajouevent-crawling:latest
+    image: ${CRAWLING_IMAGE:-ghcr.io/ajouevent/ajouevent-crawling:latest}
     container_name: ajouevent-crawling
     restart: always
     env_file:
       - .env
-    ports:
-      - "1323:1323"
-    networks:
-      - ajouevent-network
+    mem_limit: 128m
     logging:
       driver: loki
       options:
         loki-url: http://127.0.0.1:3100/loki/api/v1/push
         loki-external-labels: service=ajouevent-crawling,container_name=ajouevent-crawling
-
-networks:
-  ajouevent-network:
-    external: true
-    name: ajouevent_ajouevent-network
+        # Loki 가 내려가도 크롤러 로그 쓰기가 막히지 않게 한다
+        mode: non-blocking
+        max-buffer-size: 4m
+        loki-retries: 2
+        loki-timeout: 2s
